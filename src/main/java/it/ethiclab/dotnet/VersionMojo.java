@@ -8,15 +8,19 @@ import org.apache.maven.plugin.logging.Log;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.shared.model.fileset.FileSet;
+import org.apache.maven.shared.model.fileset.util.FileSetManager;
 
 import java.io.*;
 import java.nio.charset.Charset;
-import java.nio.file.Paths;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Mojo(name = "version")
 public class VersionMojo extends AbstractMojo {
 	
+
 	/**
      * @since <since-text>
      */
@@ -25,11 +29,65 @@ public class VersionMojo extends AbstractMojo {
 	
 	@Parameter(defaultValue = "${project}", readonly = true)
 	private MavenProject project;
+	
+	@Parameter
+	private FileSet[] sourceSets;
 
 	private static final String av = "[assembly: AssemblyVersion(\"";
 	private static final String afv = "[assembly: AssemblyFileVersion(\"";
 	private static final String aiv = "[assembly: AssemblyInformationalVersion(\"";
 	private static final String suffix = "\")]";
+	
+	private FileSet[] getSourceSets() {
+		if(sourceSets != null) {
+			for (FileSet sourceSet : sourceSets) {
+				if(sourceSet.getDirectory() == null) {
+					sourceSet.setDirectory(project.getBasedir().getAbsolutePath());
+				}
+			}
+			return sourceSets;
+		} else {
+			return new FileSet[] { getDefaultFileSetByExtension(".cs", project.getBasedir().getAbsolutePath()) };
+		}
+	}
+	
+	private FileSet getDefaultFileSetByExtension(String extension, String directory) {
+		FileSet fileSet = new FileSet();
+		fileSet.setDirectory(directory);
+		fileSet.addInclude("**/*" + extension);
+		fileSet.addExclude("**/bin/");
+		fileSet.addExclude("**/obj/");
+		fileSet.addExclude("**/target/");
+		return fileSet;
+	}
+
+	private FileSet[] getDefaultFileSetsByExtension(String extension) {
+		Set<String> scanRoots = getScanRoots();
+		FileSet[] fileSets = new FileSet[scanRoots.size()];
+		int i = 0;
+		for (String scanRoot : scanRoots) {
+			fileSets[i++] = getDefaultFileSetByExtension(extension, scanRoot);
+		}
+		return fileSets;
+	}
+
+	private Set<String> getScanRoots() {
+		Set<String> scanRoots = new HashSet<String>();
+		for (FileSet fileSet : getSourceSets()) {
+			File root = new File(fileSet.getDirectory());
+			scanRoots.add(root.getAbsolutePath());
+		}
+		return scanRoots;
+	}
+
+
+	private FileSet[] getVersionsChangedFileSets() {
+		return getDefaultFileSetsByExtension(".versionsChanged");
+	}
+
+	private FileSet[] getVersionsBackupFileSets() {
+		return getDefaultFileSetsByExtension(".versionsBackup");
+	}
 	
 	public void execute() throws MojoExecutionException
     {
@@ -49,7 +107,7 @@ public class VersionMojo extends AbstractMojo {
     		log.info("BASE DIR = " + project.getBasedir());
     		
     		try {
-				visit(project.getBasedir(), new FileProcessor() {
+				visit(getSourceSets(), new FileProcessor() {
 					
 					@Override
 					public void onFile(File f) throws IOException {
@@ -61,7 +119,7 @@ public class VersionMojo extends AbstractMojo {
 			}
     		
     		try {
-				visit(project.getBasedir(), new FileProcessor() {
+				visit(getVersionsChangedFileSets(), new FileProcessor() {
 					
 					@Override
 					public void onFile(File f) throws IOException {
@@ -76,7 +134,7 @@ public class VersionMojo extends AbstractMojo {
     		 * TODO: on commit like versions:commit
     		 */
     		try {
-				visit(project.getBasedir(), new FileProcessor() {
+				visit(getVersionsBackupFileSets(), new FileProcessor() {
 					
 					@Override
 					public void onFile(File f) throws IOException {
@@ -93,55 +151,38 @@ public class VersionMojo extends AbstractMojo {
     	}
     }
 
-	private void visit(File f, FileProcessor fp) throws IOException {
-		if (f.isDirectory()) {
-			if (f.getName().compareToIgnoreCase("bin") == 0) {
-				return;
-			}
-			if (f.getName().compareToIgnoreCase("obj") == 0) {
-				return;
-			}
-			if (f.getName().compareToIgnoreCase("target") == 0) {
-				return;
-			}
-			if (f.list() != null) {
-				for (String s : f.list()) {
-					File ff = Paths.get(f.getAbsolutePath(), s).toFile();
-					if (ff.isFile()) {
-						fp.onFile(ff);
-					} else {
-						visit(ff, fp);
-					}
+	private void visit(FileSet[] fileSets, FileProcessor fp) throws IOException {
+		FileSetManager fileSetManager = new FileSetManager();
+		for (FileSet fileSet : fileSets) {
+			String[] files = fileSetManager.getIncludedFiles(fileSet);
+			for (String file : files) {
+				File f = new File(fileSet.getDirectory(), file);
+				if(f.isFile()) {
+					fp.onFile(f);
 				}
 			}
 		}
 	}
 
 	private void processSourceFile(File f) throws IOException {
-		if (f.getName().endsWith(".cs")) {
-			getLog().info("processing " + f.getAbsolutePath());
-			if (hasAssemblyVersionInfo(f))
-			{
-				changeVersion(f);
-			}
+		getLog().info("processing " + f.getAbsolutePath());
+		if (hasAssemblyVersionInfo(f))
+		{
+			changeVersion(f);
 		}
 	}
 	
 	private void processVersionBackupFile(File f) throws IOException {
-		if (f.getName().endsWith(".versionsBackup")) {
-			String fap = f.getAbsolutePath();
-			getLog().info("processing " + fap);
-			f.delete();
-		}
+		String fap = f.getAbsolutePath();
+		getLog().info("processing " + fap);
+		f.delete();
 	}
 	
 	private void processVersionChangedFile(File f) throws IOException {
-		if (f.getName().endsWith(".versionsChanged")) {
-			String fap = f.getAbsolutePath();
-			getLog().info("processing " + fap);
-			File ff = new File(fap.substring(0, fap.lastIndexOf('.')));
-			f.renameTo(ff);
-		}
+		String fap = f.getAbsolutePath();
+		getLog().info("processing " + fap);
+		File ff = new File(fap.substring(0, fap.lastIndexOf('.')));
+		f.renameTo(ff);
 	}
 
 	private void changeVersion(File f) throws IOException {
