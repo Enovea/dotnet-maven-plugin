@@ -4,7 +4,7 @@
 
   <groupId>com.github.ethiclab</groupId>
   <artifactId>dotnet-maven-plugin</artifactId>
-  <version>1.0.3</version>
+  <version>1.0.4.ENOVEA1-SNAPSHOT</version>
   <packaging>maven-plugin</packaging>
 
   <name>dotnet Maven Plugin</name>
